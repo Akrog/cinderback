@@ -64,10 +64,19 @@ class BackupInfo(object):
         return base64.b64encode(json.dumps(self.__dict__))
 
 
-class NotAvailable(Exception):
+class BackupServiceException(Exception):
     def __init__(self, what, *args, **kwargs):
-        super(NotAvailable, self).__init__(*args, **kwargs)
+        super(BackupServiceException, self).__init__(*args, **kwargs)
         self.what = what
+
+
+class NotAvailable(BackupServiceException):
+    pass
+
+
+class BackupIsDown(BackupServiceException):
+    pass
+
 
 class BackupService(object):
     default_poll_deplay=10
@@ -121,6 +130,7 @@ class BackupService(object):
 
     def backup_all(self, all_tenants=True, keep_tenant=True, keep_only=0):
         backups = []
+        failed = []
         volumes = self.client.volumes.list(search_opts=
                                            {'all_tenants':all_tenants})
         existing_backups = self.existing_backups(all_tenants=all_tenants)
@@ -144,10 +154,13 @@ class BackupService(object):
             else:
                 tenant_client = self.client
 
-            backup = self.backup_volume(vol, name=backup_name,
-                                        client=tenant_client)
-
-            if backup:
+            try:
+                backup = self.backup_volume(vol, name=backup_name,
+                                            client=tenant_client)
+            except NotAvailable:
+                failed.append(vol)
+                backup = None
+            else:
                 backups.append(backup)
                 existing_backups[vol.id].append(backup)
                 # If we limit the number of backups and we have too many
@@ -158,13 +171,30 @@ class BackupService(object):
                     remove = len(existing_backups[vol.id]) - keep_only
                     for __ in xrange(remove):
                         back = existing_backups[vol.id].pop(0)
-                        # Todo this could fail and we have to wait
-                        back.delete()
+                        self._delete_resource(back, need_up=True)
             _LI('Backup completed')
         _LI('Finished with backups')
         return backups
 
-    def _create_and_wait(self, msg, module, arguments):
+    def _delete_resource(self, resource, wait=True, need_up=False):
+        # Snapshots and volumes, may be used with backups, need_up=True
+        try:
+            resource.delete()
+            # Probably good idea to add a timeout
+            while wait and resource.status == 'deleting':
+                time.sleep(self.poll_delay)
+                if not self.is_up:
+                    raise BackupIsDown
+                resource = resource.manager.get(resource.id)
+        except client.exceptions.NotFound:
+            pass
+
+    def _create_and_wait(self, msg, module, arguments, resources=tuple()):
+        def _cleanup(new_resource):
+            self._delete_resource(new_resource)
+            for res in resources:
+                self._delete_resource()
+
         creator = getattr(module, 'create')
         getter = getattr(module, 'get')
 
@@ -172,9 +202,13 @@ class BackupService(object):
         result = creator(**arguments)
         while result.status == 'creating':
             time.sleep(self.poll_delay)
+            if not self.is_up:
+                _cleanup(result)
+                raise BackupIsDown(what=result)
             result = getter(result.id)
 
         if result.status != 'available':
+            _cleanup(result)
             raise NotAvailable(what=result)
 
         return result
@@ -193,60 +227,38 @@ class BackupService(object):
             _LI('Volume online so this is a multi-step process')
 
             #Force snapshot since volume it's in-use
-            try:
-                snapshot = self._create_and_wait(
-                    'Creating snapshot', client.volume_snapshots,
-                    arguments=dict(
-                        volume_id=volume.id, force=True, name='tmp ' + name,
-                        description='Temporary snapshot for backup',
-                        metadata=volume.metadata))
-            except NotAvailable as e:
-                _LE('error creating snapshot')
-                e.what.delete()
-                return None
+            snapshot = self._create_and_wait(
+                'Creating snapshot', client.volume_snapshots,
+                arguments=dict(
+                    volume_id=volume.id, force=True, name='tmp ' + name,
+                    description='Temporary snapshot for backup',
+                    metadata=volume.metadata))
 
             #Force snapshot since volume it's in-use
-            try:
-                tmp_vol = self._create_and_wait(
-                    'Creating temp volume from snapshot', client.volumes,
-                    arguments=dict(
-                        size=snapshot.size, snapshot_id=snapshot.id,
-                        name='tmp '+name,
-                        description='Temporary volume for backup',
-                        metadata=volume.metadata))
-            except NotAvailable as e:
-                _LE('error creating temp volume from snapshot')
-                snapshot.delete()
-                e.what.delete()
-                return None
+            tmp_vol = self._create_and_wait(
+                'Creating temp volume from snapshot', client.volumes,
+                arguments=dict(
+                    size=snapshot.size, snapshot_id=snapshot.id,
+                    name='tmp '+name,
+                    description='Temporary volume for backup',
+                    metadata=volume.metadata), resources=(snapshot,))
 
-            try:
-                backup = self._create_and_wait(
-                    'Doing the actual backup', client.backups,
-                    arguments=dict(
-                        volume_id=tmp_vol.id, name=name, container=None,
-                        description=str(description)))
+            backup = self._create_and_wait(
+                'Doing the actual backup', client.backups,
+                arguments=dict(
+                    volume_id=tmp_vol.id, name=name, container=None,
+                    description=str(description)),
+                    resources=(snapshot, tmp_vol))
 
-            except NotAvailable as e:
-                _LE('error creating backup')
-                backup.delete()
-                return None
-            finally:
-                snapshot.delete()
-                tmp_vol.delete()
+            snapshot.delete()
+            tmp_vol.delete()
 
         elif volume.status == 'available':
-            try:
-                backup = self._create_and_wait(
-                    'Creating direct backup', client.backups,
-                    arguments=dict(
-                        volume_id=volume.id, name=name, container=None,
-                        description=str(description)))
-
-            except NotAvailable as e:
-                _LE('error creating backup')
-                backup.delete()
-                return None
+            backup = self._create_and_wait(
+                'Creating direct backup', client.backups,
+                arguments=dict(
+                    volume_id=volume.id, name=name, container=None,
+                    description=str(description)))
 
         else:
             _LE("We don't backup volume because status is %s", volume.status)
@@ -535,9 +547,14 @@ def main(args):
         exit(1)
 
     if args.action == BACKUP:
-        backup.backup_all(all_tenants=args.all_tenants,
-                          keep_tenant=args.keep_tenants,
-                          keep_only=args.keep_only)
+        try:
+            backup.backup_all(all_tenants=args.all_tenants,
+                              keep_tenant=args.keep_tenants,
+                              keep_only=args.keep_only)
+        except BackupIsDown:
+            _LC('Cinder Backup is ' + backup.backup_status)
+            exit(1)
+
         if args.filename:
             backup.export_metadata(filename=args.filename,
                                    all_tenants=args.all_tenants)
