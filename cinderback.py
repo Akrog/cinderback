@@ -94,8 +94,14 @@ class BackupService(object):
 
     @property
     def is_up(self):
-        #Check that service is up and running
-        services = self.client.services.list()
+        #Check that backup service is up and running
+        try:
+            services = self.client.services.list()
+
+        # If policy doesn't allow us to check we'll have to assume it's there
+        except client.exceptions.Forbidden:
+            return True
+
         for service in services:
             if service.binary == 'cinder-backup':
                 if service.state != 'up':
@@ -106,8 +112,7 @@ class BackupService(object):
                     if service.disabled_reason:
                         self.status_msg += ' (%s)' % service.disabled_reason
                     return False
-                else:
-                    return True
+                return True
 
         self.status_msg = "Not loaded"
         return False
