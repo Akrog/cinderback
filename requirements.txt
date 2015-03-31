@@ -1,0 +1,1 @@
+python-cinderclient>=1.1.1

@@ -1,47 +1,19 @@
 #!/bin/env python
 
-#TODO:
-# Add timeouts to waits
-# Waits must be able to leave on error, not just available
-# Add logging (option to file?)
-# Add retries
-# Add try except to all operations for each volume
-# Add log levels
-# Add metada export/import to Ceph
-# Availability zones?
-# Is metadata from original device preserved (in both cases online and direct)?
-# Change all strings to unicode (ex: u'tmp' + backup_name)
-# Backup and restore with filters (for example all from tenant X, etc)
-# Do everything in "parallel" (you make all calls to snapshot creation, then all calls to volume creation and then all calls to backup)
-# Support for consistency groups (not all drivers support it)
-# Add additional arguments (auth-system, tenant-id, domain-id, user-id...)
-# Incremental
-# Keep only last backup when doing backup
-# Restore with filters
-# Restore from a specific date
-
-# Wait for delete methods to complete
-# Display backup volume name
-
-# Catch exception where you don't have credentials to see if service is up (demo user)
-
-#Interesting stuff:
-        #    cinder.volumes.set_metadata(volumes[0], {'key':'value'})
-
-        #client.client.auth_ref['user']['id']
-        # if keep_tenant:
-        #     _LI('Transfering ownership')
-        #     owner_tenant_id = getattr(volume, 'os-vol-tenant-attr:tenant_id')
-        #     owner_client = client.Client(version=2,
-        #                                  username=os.environ['OS_USERNAME'],
-        #                                  api_key=os.environ['OS_PASSWORD'],
-        #                                  tenant_id=owner_tenant_id,
-        #                                  auth_url=os.environ['OS_AUTH_URL'])
-        #     transfer = self.client.transfers.create(volume.id, name)
-        #     t = owner_client.transfers.accept(transfer.id, transfer.auth_key)
-        # #'os-vol-tenant-attr:tenant_id': u'0515a88731cb470b926ed7579a68b7b5',
-        # # 'user_id': u'57f2b808c15c4943969d3e4069864c64',
-
+# Copyright 2015 Red Hat, Inc.
+# All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
 
 import argparse
 import base64
