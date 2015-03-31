@@ -431,7 +431,7 @@ def get_arg_parser():
     parser = MyParser(description='Cinder auto backup management tool',
                       epilog='epilog', version=VERSION,
                       add_help=True)
-    parser.add_argument('--all-tenants', dest='all_tenants',
+    parser.add_argument('-a', '--all-tenants', dest='all_tenants',
                         action='store_true', default=False,
                         help='include volumes/backups from all tenants'
                              '(default only from supplied tenant)')
@@ -450,7 +450,7 @@ def get_arg_parser():
                         default=os.environ['OS_AUTH_URL'],
                         help='URL for the authentication service. '
                              'Default=env[OS_AUTH_URL]')
-    parser.add_argument('--quiet', dest='quiet',
+    parser.add_argument('-q', '--quiet', dest='quiet',
                         default=False, action='store_true',
                         help='No output except warnings or errors')
 
@@ -553,9 +553,11 @@ def main(args):
                   '+' + '-' * (1+4+1))
 
     elif args.action == RESTORE:
-        # TODO look if metadata from other tenants is restored correctly (they can see it)
+        # TODO look if metadata from other tenants is restored correctly
+        # (they can see it)
         if args.filename:
             backup.import_metadata(filename=args.filename)
+
         backup.restore_all(all_tenants=args.all_tenants,
                            keep_tenant=args.keep_tenants,
                            restore_id=args.restore_id,
@@ -566,9 +568,9 @@ def main(args):
     elif args.action == EXPORT:
         backup.export_metadata(filename=args.filename,
                                all_tenants=args.all_tenants)
+
     else:
         backup.import_metadata(filename=args.filename)
-
 
 
 if __name__ == '__main__':
