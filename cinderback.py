@@ -70,14 +70,16 @@ class NotAvailable(Exception):
         self.what = what
 
 class BackupService(object):
-    def __init__(self, username, api_key, project_id, auth_url, poll_delay=1,
-                 name_prefix='auto_backup_'):
+    default_poll_deplay=10
+
+    def __init__(self, username, api_key, project_id, auth_url,
+                 poll_delay=None, name_prefix='auto_backup_'):
         super(BackupService, self).__init__()
         self.username = username
         self.api_key = api_key
         self.project_id = project_id
         self.auth_url = auth_url
-        self.poll_delay = poll_delay
+        self.poll_delay = poll_delay or self.default_poll_deplay
         self.name_prefix = name_prefix
 
         self.client = client.Client(version=2,
