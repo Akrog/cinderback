@@ -156,12 +156,19 @@ def get_arg_parser():
                         default=True, help="don't make backups available to "
                         "original tenant (default available)")
 
+    # Timeout argument is commong to backup and restore
+    timeout=dict(dest='max_secs_gbi', type=int, default=300,
+                        help='maximum expected time in seconds to transfer ' 
+                        'each GB, for timeout purposes. Backup will be deleted'
+                        ' if it timeouts (default 5 minutes)')
+
     # Backup action
     parser_backup = subparsers.add_parser(BACKUP, help='do backups')
     parser_backup.add_argument('--export-metadata', dest='filename',
                                default=None,  metavar='<FILENAME>',
                                help='export all auto backup metadata to file')
     parser_backup.add_argument('--forget-tenants', **forget_tenants)
+    parser_backup.add_argument('--timeout-gb', **timeout)
     parser_backup.add_argument('--keep-only', dest='keep_only', default=0,
                                metavar='<#>',
                                type=int, help='how many automatic backups to '
@@ -172,6 +179,7 @@ def get_arg_parser():
     parser_restore = subparsers.add_parser(RESTORE, help='restore backups',
                                            epilog='Restore last backup')
 
+    parser_restore.add_argument('--timeout-gb', **timeout)
     parser_restore.add_argument('--forget-tenants', **forget_tenants)
     parser_restore.add_argument('--restore-id',
                                 dest='restore_id',
@@ -273,6 +281,11 @@ class BackupServiceException(Exception):
 class UnexpectedStatus(BackupServiceException):
     pass
 
+
+class TimeoutError(BackupServiceException):
+    pass
+
+
 class BackupIsDown(BackupServiceException):
     pass
 
@@ -284,7 +297,8 @@ class BackupService(object):
     default_poll_deplay=10
 
     def __init__(self, username, api_key, project_id, auth_url,
-                 poll_delay=None, name_prefix='auto_backup_'):
+                 poll_delay=None, name_prefix='auto_backup_',
+                 max_secs_gbi=None):
         super(BackupService, self).__init__()
         self.username = username
         self.api_key = api_key
@@ -300,6 +314,7 @@ class BackupService(object):
                                     project_id=project_id,
                                     auth_url=auth_url)
         self.status_msg = ''
+        self.max_secs_gbi = max_secs_gbi or 300
 
     @property
     def backup_status(self):
@@ -386,6 +401,10 @@ class BackupService(object):
                                             client=tenant_client)
             except BackupIsDown:
                 raise
+            except TimeoutError:
+                _LE('Timeout on backup')
+                failed.append(vol)
+                backup=None
             except Exception as e:
                 _LX('Exception while doing backup')
                 failed.append(vol)
@@ -410,7 +429,8 @@ class BackupService(object):
         _LI('Finished with backups')
         return (backups, failed)
 
-    def _wait_for(self, resource, allowed_states, expected_states=None, need_up=False):
+    def _wait_for(self, resource, allowed_states, expected_states=None,
+                  need_up=False):
         """Waits for a resource to come to a specific state.
         
         :param resource: Resource we want to wait for
@@ -420,11 +440,13 @@ class BackupService(object):
         :param need_up: If wee need backup service to be up and running
         :return: The most updated resource
         """
-        # TODO: Add a timeout
+        deadline = time.time() + (self.max_secs_gbi * resource.size)
         while resource.status in allowed_states:
             time.sleep(self.poll_delay)
             if need_up and not self.is_up:
                 raise BackupIsDown(what=resource)
+            if deadline <= time.time():
+                raise TimeoutError(what=resource)
             resource = resource.manager.get(resource.id)
 
         if expected_states and resource.status not in expected_states:
@@ -763,7 +785,8 @@ def main(args):
     backup = BackupService(username=args.username,
                            api_key=args.password,
                            project_id=args.tenant_name,
-                           auth_url=args.auth_url)
+                           auth_url=args.auth_url,
+                           max_secs_gbi=getattr(args, 'max_secs_gbi', None))
 
     if not backup.is_up:
         _LC('Cinder Backup is ' + backup.backup_status)
