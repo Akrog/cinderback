@@ -26,8 +26,6 @@ import os
 import sys
 import time
 
-import pdb
-
 from cinderclient import client
 from cinderclient import v2
 
@@ -54,7 +52,7 @@ def get_arg_parser():
 
     general_description = (
     "Cinder auto backup management tool\n\n"
-    "This is a helper for OpenStack's Cinder backup functionallity to help "
+    "This is a helper for OpenStack's Cinder backup functionality to help "
     "create and restore automatic backups as well and export and import backup"
     "metadata.\n\n"
     "Metadata for backup volumes is stored in the DB and if this is lost, "
@@ -67,7 +65,7 @@ def get_arg_parser():
     "not match the originator. This helper will show original volume id on "
     "list. Once Cinder supports backup from snapshot the volume creation step "
     "will be removed.\n\n"
-    "Incremental backups is a feature that's being developped right now and "
+    "Incremental backups is a feature that's being developed right now and "
     "should be available soon.\n\n"
     "Cinder backup by default doesn't restore volume name and description, but"
     " this helper does." )
@@ -88,8 +86,8 @@ def get_arg_parser():
     "backups from tenants:\n"
     "\tcinderback.py --all-tenants --forget-tenants --export-metadata "
     "./backup.metadata backup\n"
-    "As administrator import metadata and restore all backups created by us (if"
-    " we created volumes for other tenants they will also be restored) to "
+    "As administrator import metadata and restore all backups created by us "
+    "(if we created volumes for other tenants they will also be restored) to "
     "their original ids (volumes with those ids must exist):\n"
     "\tcinderback.py --restore-id --import-metadata ./backup.metadata "
     "restore\n"
@@ -138,12 +136,14 @@ def get_arg_parser():
                                        help='action to perform')
 
     # Metadata export action
-    parser_export = subparsers.add_parser(EXPORT, help='export backups metadata')
+    parser_export = subparsers.add_parser(EXPORT,
+                                          help='export backups metadata')
     parser_export.add_argument('filename', metavar='<FILENAME>',
                                help='file to export to')
 
     # Metadata import action
-    parser_import = subparsers.add_parser(IMPORT, help='import backups metadata')
+    parser_import = subparsers.add_parser(IMPORT,
+                                          help='import backups metadata')
     parser_import.add_argument('filename',  metavar='<FILENAME>',
                                help='file to import from')
 
@@ -151,12 +151,12 @@ def get_arg_parser():
     parser_list = subparsers.add_parser(LIST, help='list available automatic '
                                                    'backups')
 
-    # Keep tenants argument is commong to backup and restore
+    # Keep tenants argument is common to backup and restore
     forget_tenants=dict(dest='keep_tenants', action='store_false',
                         default=True, help="don't make backups available to "
                         "original tenant (default available)")
 
-    # Timeout argument is commong to backup and restore
+    # Timeout argument is common to backup and restore
     timeout=dict(dest='max_secs_gbi', type=int, default=300,
                         help='maximum expected time in seconds to transfer ' 
                         'each GB, for timeout purposes. Backup will be deleted'
@@ -491,16 +491,16 @@ class BackupService(object):
         except:
             _cleanup(result)
             raise
-                
+ 
         return result
 
     def backup_volume(self, volume, name=None, client=None):
         """Backup a volume using a volume object or it's id.
-        
+
         :param volume: Volume object or volume id as a string.
         :param name: Name for the backup
         :param client: If we want ot use a specific client instead of this
-                       instance's client. Usefull when creating backups for
+                       instance's client. Useful when creating backups for
                        other tenants.
         :return: Backup object
         """
@@ -512,7 +512,7 @@ class BackupService(object):
         client = client or self.client
         name = name or self.name_prefix + volume.id
 
-        # Use encoded original's volume info as description
+        # Use encoded original volume info as description
         description = BackupInfo(volume)
 
         if volume.status == 'in-use':
@@ -541,7 +541,7 @@ class BackupService(object):
                 arguments=dict(
                     volume_id=tmp_vol.id, name=name, container=None,
                     description=str(description)),
-                    resources=(snapshot, tmp_vol))
+                resources=(snapshot, tmp_vol))
 
             # Cleanup temporary resources
             snapshot.delete()
@@ -577,8 +577,8 @@ class BackupService(object):
         """Retrieve existing backups and return a defaultdict with backups
         grouped by original volume id."""
         # Get list of backups from Cinder Backup service
-        backups = self.client.backups.list(search_opts=
-                                           {'all_tenants': all_tenants})
+        backups = self.client.backups.list(
+            search_opts={'all_tenants': all_tenants})
 
         # Leave only automatic backups based on the backup name
         backups = filter(self._is_auto_backup, backups)
@@ -587,7 +587,7 @@ class BackupService(object):
         volumes = defaultdict(list)
         for backup in backups:
             backup.created_at_dt = datetime.strptime(backup.created_at,
-                                                    "%Y-%m-%dT%H:%M:%S.%f")
+                                                     '%Y-%m-%dT%H:%M:%S.%f')
             volumes[backup.name[len(self.name_prefix):]].append(backup)
 
         # Order the backups for each volume oldest first
@@ -597,7 +597,7 @@ class BackupService(object):
         return volumes
 
     def _restore_and_wait(self, client, backup_id, new_volume_id):
-         # Restore the backup
+        # Restore the backup
         restore = client.restores.restore(backup_id=backup_id,
                                           volume_id=new_volume_id)
 
@@ -605,7 +605,7 @@ class BackupService(object):
         result = self._wait_for(volume, ('restoring-backup',), 'available',
                                 True)
         return result
-            
+
     def restore_volume(self, backup, keep_tenant, restore_id, restore_data):
         """Restore a specific backup
 
@@ -643,24 +643,22 @@ class BackupService(object):
         # If we have to restore the tenant we need a different client
         if keep_tenant and not same_tenant:
             _LI("Using owner's tenant")
-            tenant_client= client.Client(version=2,
-                                         username=self.username,
-                                         api_key=self.api_key,
-                                         tenant_id=backup_info.owner_tenant_id,
-                                         auth_url=self.auth_url)
+            tenant_client = client.Client(
+                version=2, username=self.username, api_key=self.api_key,
+                tenant_id=backup_info.owner_tenant_id, auth_url=self.auth_url)
         else:
             tenant_client = self.client
 
         # Restore the backup
         restore = self._restore_and_wait(tenant_client, backup.id, new_id)
-                   
+
         # Recover volume name and description
         if restore_data:
             restore.update(name=backup_info.name,
-                          description=backup_info.description)
+                           description=backup_info.description)
         else:
             restore.update(description='auto_restore_' + backup_info.id + '_' +
-                                      backup_info.name)
+                           backup_info.name)
 
     def restore_all(self, all_tenants=True, keep_tenant=True, restore_id=False,
                     restore_data=True, volume_id=None, backup_id=None):
@@ -729,7 +727,6 @@ class BackupService(object):
 
         metadatas = []
         for back in backups:
-            #TODO add try
             try:
                 metadata = self.client.backups.export_record(back.id)
             except Exception as e:
@@ -738,13 +735,12 @@ class BackupService(object):
             else:
                 metadatas.append(metadata)
 
-        # TODO add try
         try:
             with open(filename, 'w') as f:
                 json.dump(metadatas, f)
         except Exception as e:
             _LE('Error saving metadata to %(filename)s (%(exception)s)',
-                {'filename': filename, 'exception': exception})
+                {'filename': filename, 'exception': e})
 
     def import_metadata(self, filename):
         """Import backup metadata to DB from file."""
@@ -764,7 +760,7 @@ class BackupService(object):
     def list_backups(self, all_tenants=False):
         def _separator(separator):
             return (separator * (19+1) +
-                    '+' + separator * (1+36+1) + 
+                    '+' + separator * (1+36+1) +
                     '+' + separator * (1+36+1) +
                     '+' + separator * (1+4+1))
 
@@ -779,7 +775,6 @@ class BackupService(object):
                                     backup.id, backup.size)
             print mid_separator
 
-           
 
 def main(args):
     backup = BackupService(username=args.username,
@@ -815,7 +810,7 @@ def main(args):
             backup.export_metadata(filename=args.filename,
                                    all_tenants=args.all_tenants)
 
-    else: # if args.action == RESTORE:
+    else:  # if args.action == RESTORE:
         # TODO look if metadata from other tenants is restored correctly
         # (they can see it)
         if args.filename:
