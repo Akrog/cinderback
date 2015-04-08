@@ -31,409 +31,11 @@ import pdb
 from cinderclient import client
 from cinderclient import v2
 
+
 VERSION = '0.1'
 
-class tty_colors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
 
-class BackupInfo(object):
-    def __init__(self, data):
-        if isinstance(data, str):
-            self.__dict__ = json.loads(base64.b64decode(data))
-        elif isinstance(data, v2.volume_backups.VolumeBackup):
-            self.__dict__ = json.loads(
-                base64.b64decode(data.description))
-        elif isinstance(data, v2.volumes.Volume):
-            self.id = data.id
-            self.owner_tenant_id = getattr(data,
-                                           'os-vol-tenant-attr:tenant_id')
-            self.name = data.name
-            self.description = data.description
-        else:
-            raise ValueError('data argument is of unknown class %s',
-                             type(data))
-
-    def __repr__(self):
-        return base64.b64encode(json.dumps(self.__dict__))
-
-
-class BackupServiceException(Exception):
-    def __init__(self, what, *args, **kwargs):
-        super(BackupServiceException, self).__init__(*args, **kwargs)
-        self.what = what
-
-
-class NotAvailable(BackupServiceException):
-    pass
-
-
-class BackupIsDown(BackupServiceException):
-    pass
-
-
-class BackupService(object):
-    default_poll_deplay=10
-
-    def __init__(self, username, api_key, project_id, auth_url,
-                 poll_delay=None, name_prefix='auto_backup_'):
-        super(BackupService, self).__init__()
-        self.username = username
-        self.api_key = api_key
-        self.project_id = project_id
-        self.auth_url = auth_url
-        self.poll_delay = poll_delay or self.default_poll_deplay
-        self.name_prefix = name_prefix
-
-        self.client = client.Client(version=2,
-                                    username=username,
-                                    api_key=api_key,
-                                    project_id=project_id,
-                                    auth_url=auth_url)
-        self.status_msg = ''
-
-
-    @property
-    def backup_status(self):
-        return self.status_msg
-
-    @property
-    def is_up(self):
-        #Check that backup service is up and running
-        try:
-            services = self.client.services.list()
-
-        # If policy doesn't allow us to check we'll have to assume it's there
-        except client.exceptions.Forbidden:
-            return True
-
-        for service in services:
-            if service.binary == 'cinder-backup':
-                if service.state != 'up':
-                    self.status_msg = service.state
-                    return False
-                if service.status != 'enabled':
-                    self.status_msg = service.status
-                    if service.disabled_reason:
-                        self.status_msg += ' (%s)' % service.disabled_reason
-                    return False
-                return True
-
-        self.status_msg = "Not loaded"
-        return False
-
-    def backup_all(self, all_tenants=True, keep_tenant=True, keep_only=0):
-        backups = []
-        failed = []
-        volumes = self.client.volumes.list(search_opts=
-                                           {'all_tenants':all_tenants})
-        existing_backups = self.existing_backups(all_tenants=all_tenants)
-        _LI('Starting Volumes Backup')
-        for vol in volumes:
-            vol_name = vol.name or vol.id
-            _LI(tty_colors.HEADER + 'Processing volume ' + vol_name +
-                tty_colors.ENDC)
-            backup_name = self.name_prefix + vol.id
-
-            owner_tenant_id = getattr(vol, 'os-vol-tenant-attr:tenant_id')
-            same_tenant = (self.client.client.auth_ref['token']['tenant']['id']
-                           == owner_tenant_id)
-            if keep_tenant and not same_tenant:
-                _LI("Using owner's tenant")
-                tenant_client= client.Client(version=2,
-                                             username=self.username,
-                                             api_key=self.api_key,
-                                             tenant_id=owner_tenant_id,
-                                             auth_url=self.auth_url)
-            else:
-                tenant_client = self.client
-
-            try:
-                backup = self.backup_volume(vol, name=backup_name,
-                                            client=tenant_client)
-            except NotAvailable:
-                failed.append(vol)
-                backup = None
-            else:
-                backups.append(backup)
-                existing_backups[vol.id].append(backup)
-                # If we limit the number of backups and we have too many
-                # backups for this volume
-                if (keep_only and
-                    len(existing_backups.get(vol.id, tuple())) > keep_only):
-                    _LI('Removing old backups')
-                    remove = len(existing_backups[vol.id]) - keep_only
-                    for __ in xrange(remove):
-                        back = existing_backups[vol.id].pop(0)
-                        self._delete_resource(back, need_up=True)
-            _LI('Backup completed')
-        _LI('Finished with backups')
-        return backups
-
-    def _delete_resource(self, resource, wait=True, need_up=False):
-        # Snapshots and volumes, may be used with backups, need_up=True
-        try:
-            resource.delete()
-            # Probably good idea to add a timeout
-            while wait and resource.status == 'deleting':
-                time.sleep(self.poll_delay)
-                if not self.is_up:
-                    raise BackupIsDown
-                resource = resource.manager.get(resource.id)
-        except client.exceptions.NotFound:
-            pass
-
-    def _create_and_wait(self, msg, module, arguments, resources=tuple()):
-        def _cleanup(new_resource):
-            self._delete_resource(new_resource)
-            for res in resources:
-                self._delete_resource()
-
-        creator = getattr(module, 'create')
-        getter = getattr(module, 'get')
-
-        _LI(msg)
-        result = creator(**arguments)
-        while result.status == 'creating':
-            time.sleep(self.poll_delay)
-            if not self.is_up:
-                _cleanup(result)
-                raise BackupIsDown(what=result)
-            result = getter(result.id)
-
-        if result.status != 'available':
-            _cleanup(result)
-            raise NotAvailable(what=result)
-
-        return result
-
-
-    def backup_volume(self, volume, name=None, description=None, client=None):
-        if isinstance(volume, str):
-            # TODO: This could fail
-            volume = self.client.volumes.get(volume)
-
-        client = client or self.client
-        name = name or self.name_prefix + volume.id
-        description = description or BackupInfo(volume)
-
-        if volume.status == 'in-use':
-            _LI('Volume online so this is a multi-step process')
-
-            #Force snapshot since volume it's in-use
-            snapshot = self._create_and_wait(
-                'Creating snapshot', client.volume_snapshots,
-                arguments=dict(
-                    volume_id=volume.id, force=True, name='tmp ' + name,
-                    description='Temporary snapshot for backup',
-                    metadata=volume.metadata))
-
-            #Force snapshot since volume it's in-use
-            tmp_vol = self._create_and_wait(
-                'Creating temp volume from snapshot', client.volumes,
-                arguments=dict(
-                    size=snapshot.size, snapshot_id=snapshot.id,
-                    name='tmp '+name,
-                    description='Temporary volume for backup',
-                    metadata=volume.metadata), resources=(snapshot,))
-
-            backup = self._create_and_wait(
-                'Doing the actual backup', client.backups,
-                arguments=dict(
-                    volume_id=tmp_vol.id, name=name, container=None,
-                    description=str(description)),
-                    resources=(snapshot, tmp_vol))
-
-            snapshot.delete()
-            tmp_vol.delete()
-
-        elif volume.status == 'available':
-            backup = self._create_and_wait(
-                'Creating direct backup', client.backups,
-                arguments=dict(
-                    volume_id=volume.id, name=name, container=None,
-                    description=str(description)))
-
-        else:
-            _LE("We don't backup volume because status is %s", volume.status)
-            return None
-
-        # TODO check if we
-
-        return backup
-
-    def _is_auto_backup(self, backup):
-        # It must have the right prefix
-        if not backup.name.startswith(self.name_prefix):
-            return False
-
-        # And description must contain json formatted data base64 encoded
-        try:
-            BackupInfo(backup)
-        except ValueError:
-            return False
-        return True
-
-    def existing_backups(self, all_tenants=True):
-        # Get list of backups from Cinder Backup service
-        backups = self.client.backups.list(search_opts=
-                                           {'all_tenants': all_tenants})
-
-        # Leave only automatic backups based on the backup name
-        backups = filter(self._is_auto_backup, backups)
-
-        # Dictionary of volumes with the list of backups for each one
-        volumes = defaultdict(list)
-        for backup in backups:
-            backup.created_at_dt = datetime.strptime(backup.created_at,
-                                                    "%Y-%m-%dT%H:%M:%S.%f")
-            volumes[backup.name[len(self.name_prefix):]].append(backup)
-
-        # Order the backups for each volume
-        for volume in volumes.itervalues():
-            volume.sort(key=attrgetter('created_at_dt'))
-
-        return dict(volumes)
-
-    def restore_volume(self, backup, keep_tenant, restore_id, restore_data):
-        backup_info = BackupInfo(backup)
-
-        if restore_id:
-            try:
-                volume = self.client.volumes.get(backup_info.id)
-                if volume.status != 'available':
-                    _LW('Skipping, cannot restore to a non-available volume')
-                    return
-            except client.exceptions.NotFound:
-                _LW("Skipping, destination id doesn't exist")
-                return
-            except client.exceptions.ClientException as e:
-                _LW('Error when checking volume (%s)', e)
-                return
-            new_id = backup_info.id
-        else:
-            new_id = None
-
-        same_tenant = (self.client.client.auth_ref['token']['tenant']['id']
-                       == backup_info.owner_tenant_id)
-
-        if keep_tenant and not same_tenant:
-            _LI("Using owner's tenant")
-            tenant_client= client.Client(version=2,
-                                         username=self.username,
-                                         api_key=self.api_key,
-                                         tenant_id=backup_info.owner_tenant_id,
-                                         auth_url=self.auth_url)
-        else:
-            tenant_client = self.client
-
-        restore = tenant_client.restores.restore(backup_id=backup.id,
-                                                 volume_id=new_id)
-
-        if not restore_id:
-            new_id = restore.volume_id
-
-        volume = tenant_client.volumes.get(new_id)
-        # Wait for the restoration to complete
-        while volume.status != 'available':
-            time.sleep(self.poll_delay)
-            volume = tenant_client.volumes.get(new_id)
-
-        # Recover volume name and description
-        if restore_data:
-            volume.update(name=backup_info.name,
-                          description=backup_info.description)
-        else:
-            volume.update(description='auto_restore_' + backup_info.id + '_' +
-                                      backup_info.name)
-
-    def restore_all(self, all_tenants=True, keep_tenant=True, restore_id=False,
-                    restore_data=True, volume_id=None, backup_id=None):
-        _LI('Starting Volumes Restore')
-        backups = self.existing_backups(all_tenants=all_tenants)
-
-        if volume_id:
-            backup = backups.get(volume_id)
-            if not backup:
-                _LE('no backups for volume %s', volume_id)
-                exit(1)
-
-            backups = {volume_id: backups[volume_id]}
-        elif backup_id:
-            for vol, backs in backups.iteritems():
-                if backup_id in map(attrgetter('id'), backs):
-                    backups = {vol: backs}
-                    break
-            else:
-                _LE("backup doesn't exist")
-                exit(1)
-
-        for volume_id in backups:
-            # Get the latest backup
-            backup = backups[volume_id][-1]
-            _LI(tty_colors.HEADER + 'Processing volume ' + volume_id +
-                tty_colors.ENDC)
-
-            self.restore_volume(backup, keep_tenant=keep_tenant,
-                                restore_id=restore_id,
-                                restore_data=restore_data)
-            _LI('Restore completed')
-        _LI('Finished with restores')
-
-    def export_metadata(self, filename, all_tenants=False):
-        existing_backs = self.existing_backups(all_tenants=all_tenants)
-        # Flatten the lists
-        backups = [back for backs in existing_backs.itervalues()
-                   for back in backs]
-
-        metadatas = []
-        for back in backups:
-            #TODO add try
-            metadata = self.client.backups.export_record(back.id)
-            metadatas.append(metadata)
-
-        # TODO add try
-        with open(filename, 'w') as f:
-            json.dump(metadatas, f)
-
-    def import_metadata(self, filename):
-        with open(filename, 'r') as f:
-            records = json.load(f)
-
-        for metadata in records:
-            self.client.backups.import_record(**metadata)
-
-def create_logger(quiet=False):
-    global _LI, _LW, _LE, _LC
-
-    logger = logging.getLogger(__name__)
-
-    logger.setLevel(logging.WARNING if quiet else logging.INFO)
-
-    # create console handler and set level
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-
-    # create formatter for ch
-    formatter = logging.Formatter('%(levelname)s:%(message)s')
-    ch.setFormatter(formatter)
-
-    # add ch to logger
-    logger.addHandler(ch)
-
-    _LI = logger.info
-    _LW = logger.warning
-    _LE = logger.error
-    _LC = logger.critical
-
-    return logger
-
+# Available script actions
 BACKUP = 'backup'
 RESTORE = 'restore'
 LIST = 'list'
@@ -441,15 +43,73 @@ EXPORT = 'export'
 IMPORT = 'import'
 
 def get_arg_parser():
+    """Create parser with script options."""
+
     class MyParser(argparse.ArgumentParser):
         def error(self, message):
             self.print_help()
             sys.stderr.write('\nerror: %s\n' % message)
             sys.exit(2)
 
-    parser = MyParser(description='Cinder auto backup management tool',
-                      epilog='epilog', version=VERSION,
-                      add_help=True)
+
+    general_description = (
+    "Cinder auto backup management tool\n\n"
+    "This is a helper for OpenStack's Cinder backup functionallity to help "
+    "create and restore automatic backups as well and export and import backup"
+    "metadata.\n\n"
+    "Metadata for backup volumes is stored in the DB and if this is lost, "
+    "Cinder won't be able to restore volumes from backups. So it is "
+    "recommended to always export your backup metadata and keep it safe.\n\n"
+    "Currently Cinder can only backup available volumes, so for in-use volumes"
+    " this helper will create a temporary snapshot of the volume, create a "
+    "temporary volume from that snapshot and create the backup from that "
+    "snapshot. This means that if we look in Cinder backup the volume id will "
+    "not match the originator. This helper will show original volume id on "
+    "list. Once Cinder supports backup from snapshot the volume creation step "
+    "will be removed.\n\n"
+    "Incremental backups is a feature that's being developped right now and "
+    "should be available soon.\n\n"
+    "Cinder backup by default doesn't restore volume name and description, but"
+    " this helper does." )
+
+    general_epilog = (
+    "Use {action} -h to see specific action help\n\n"
+    "*Basic usage:*\n"
+    "Create backups for all our volumes using credentials from environment and"
+    " keep only the previous backup (delete older ones):\n"
+    "\tcinderback.py backup --keep-only 2\n"
+    "Restore latests backups for all our volumes using credentials from "
+    "environment:\n"
+    "\tcinderback.py restore\n"
+    "List existing automatic backups:\n"
+    "\tcinderback.py list\n"
+    "\n*Advanced usage:*\n"
+    "As administrator create all backups of tenants, export metadata and hide "
+    "backups from tenants:\n"
+    "\tcinderback.py --all-tenants --forget-tenants --export-metadata "
+    "./backup.metadata backup\n"
+    "As administrator import metadata and restore all backups created by us (if"
+    " we created volumes for other tenants they will also be restored) to "
+    "their original ids (volumes with those ids must exist):\n"
+    "\tcinderback.py --restore-id --import-metadata ./backup.metadata "
+    "restore\n"
+    "As administrator import oldest backups for every volume (created by us or"
+    " by tenants):\n"
+    "\tcinderback.py --all-tenants restore\n"
+    "Restore only 1 specific automatic backup using the backup id (used for "
+    "non last backups):\n"
+    "\tcinderback.py restore --backup_id $backup_uuid\n"
+    "Restore only automatic backup for specific volume:\n"
+    "\tcinderback.py restore --volume-id $volume_id\n"
+    "List existing backups from all tenants:\n"
+    "\tcinderback.py --all-tenants list\n")
+
+    parser = MyParser(description=general_description,
+                      epilog=general_epilog, version=VERSION,
+                      add_help=True,
+                      formatter_class=argparse.RawTextHelpFormatter)
+
+    # Common arguments to all actions
     parser.add_argument('-a', '--all-tenants', dest='all_tenants',
                         action='store_true', default=False,
                         help='include volumes/backups from all tenants'
@@ -473,25 +133,30 @@ def get_arg_parser():
                         default=False, action='store_true',
                         help='No output except warnings or errors')
 
+    # Subparser for available actions
     subparsers = parser.add_subparsers(title='actions', dest='action',
                                        help='action to perform')
 
-    parser_export = subparsers.add_parser(EXPORT, help='export metadata')
+    # Metadata export action
+    parser_export = subparsers.add_parser(EXPORT, help='export backups metadata')
     parser_export.add_argument('filename', metavar='<FILENAME>',
                                help='file to export to')
 
-    parser_export = subparsers.add_parser(IMPORT, help='import metadata')
-    parser_export.add_argument('filename',  metavar='<FILENAME>',
+    # Metadata import action
+    parser_import = subparsers.add_parser(IMPORT, help='import backups metadata')
+    parser_import.add_argument('filename',  metavar='<FILENAME>',
                                help='file to import from')
 
+    # Backups list action
     parser_list = subparsers.add_parser(LIST, help='list available automatic '
                                                    'backups')
 
-    # This argument will be for backup and restore
+    # Keep tenants argument is commong to backup and restore
     forget_tenants=dict(dest='keep_tenants', action='store_false',
                         default=True, help="don't make backups available to "
                         "original tenant (default available)")
 
+    # Backup action
     parser_backup = subparsers.add_parser(BACKUP, help='do backups')
     parser_backup.add_argument('--export-metadata', dest='filename',
                                default=None,  metavar='<FILENAME>',
@@ -503,11 +168,11 @@ def get_arg_parser():
                                               'keep, oldest ones will be '
                                               'deleted (default keep all)')
 
+    # Restore action
     parser_restore = subparsers.add_parser(RESTORE, help='restore backups',
                                            epilog='Restore last backup')
 
     parser_restore.add_argument('--forget-tenants', **forget_tenants)
-
     parser_restore.add_argument('--restore-id',
                                 dest='restore_id',
                                 default=False, action='store_true',
@@ -532,9 +197,567 @@ def get_arg_parser():
                                    dest='backup_id',
                                    default=None,
                                    help='specific backup to restore')
-
     return parser
 
+
+def create_logger(quiet=False):
+    global _LI, _LW, _LE, _LC, _LX
+
+    logger = logging.getLogger(__name__)
+
+    logger.setLevel(logging.WARNING if quiet else logging.INFO)
+
+    # create console handler and set level
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+
+    # create formatter for ch
+    formatter = logging.Formatter('%(levelname)s:%(message)s')
+    ch.setFormatter(formatter)
+
+    # add ch to logger
+    logger.addHandler(ch)
+
+    _LI = logger.info
+    _LW = logger.warning
+    _LE = logger.error
+    _LC = logger.critical
+    _LX = logger.exception
+
+    return logger
+
+
+class BackupInfo(object):
+    """Representation of volume information to store in backup description."""
+
+    @staticmethod
+    def _from_b64_json(data):
+        """Convert from base 64 json data to Python objects."""
+        return json.loads(base64.b64decode(data))
+
+    def __init__(self, data):
+        """Accept string, backup or volume classes."""
+        # For strings we assume it's the __repr__ value
+        if isinstance(data, str):
+            self.__dict__ = self._from_b64_json(data)
+
+        # If it's a backup we extract information from the description
+        elif isinstance(data, v2.volume_backups.VolumeBackup):
+            self.__dict__ = self._from_b64_json(data.description)
+
+        # If it's a volume we store relevant volume information.
+        # At this point in time it's only id, tenant, name and description.
+        elif isinstance(data, v2.volumes.Volume):
+            self.id = data.id
+            self.owner_tenant_id = getattr(data,
+                                           'os-vol-tenant-attr:tenant_id')
+            self.name = data.name
+            self.description = data.description
+
+        # We don't know how to treat additional types
+        else:
+            raise ValueError('data argument is of unknown class %s',
+                             type(data))
+
+    def __repr__(self):
+        """Base 64 encodejson representation of instance."""
+        return base64.b64encode(json.dumps(self.__dict__))
+
+
+class BackupServiceException(Exception):
+    def __init__(self, what, *args, **kwargs):
+        super(BackupServiceException, self).__init__(*args, **kwargs)
+        self.what = what
+
+
+class UnexpectedStatus(BackupServiceException):
+    pass
+
+class BackupIsDown(BackupServiceException):
+    pass
+
+
+class BackupService(object):
+    """Backup creation and restoration class."""
+
+    # Poll interval in seconds when creating or destroying resources.
+    default_poll_deplay=10
+
+    def __init__(self, username, api_key, project_id, auth_url,
+                 poll_delay=None, name_prefix='auto_backup_'):
+        super(BackupService, self).__init__()
+        self.username = username
+        self.api_key = api_key
+        self.project_id = project_id
+        self.auth_url = auth_url
+        self.poll_delay = poll_delay or self.default_poll_deplay
+        self.name_prefix = name_prefix
+
+        # Some functionality requires API version 2
+        self.client = client.Client(version=2,
+                                    username=username,
+                                    api_key=api_key,
+                                    project_id=project_id,
+                                    auth_url=auth_url)
+        self.status_msg = ''
+
+    @property
+    def backup_status(self):
+        """On error this may have additional information."""
+        return self.status_msg
+
+    @property
+    def is_up(self):
+        """Check whether backup service is up and running or not.
+        If we are not allowed to check it we assume it's always up."""
+        # Get services list
+        try:
+            services = self.client.services.list()
+
+        # If policy doesn't allow us to check we'll have to assume it's there
+        except client.exceptions.Forbidden:
+            return True
+
+        # Search for cinder backup service
+        for service in services:
+            if service.binary == 'cinder-backup':
+                # Must be up
+                if service.state != 'up':
+                    self.status_msg = service.state
+                    return False
+                # And enabled
+                if service.status != 'enabled':
+                    self.status_msg = service.status
+                    if service.disabled_reason:
+                        self.status_msg += ' (%s)' % service.disabled_reason
+                    return False
+                return True
+
+        # If we can't even find it in services list it's not loaded
+        self.status_msg = "Not loaded"
+        return False
+
+    def backup_all(self, all_tenants=True, keep_tenant=True, keep_only=0):
+        """Creates backup for all visible volumes.
+
+        :all_tenants: Backup volumes for all tenants, not only ourselves.
+        :param keep_tenant: If we want owners to see automatic backups of their
+                            volumes. Only relevant when using all_tenants=True
+        :param keep_only: Amount of backups to keep including the new one.
+                          Older ones will be deleted.
+        :return: ([successful_backup_object], [failed_volume_object])
+                                
+        """
+        backups = []
+        failed = []
+
+        # Get visible volumes
+        volumes = self.client.volumes.list(search_opts=
+                                           {'all_tenants':all_tenants})
+
+        # Get existing backups
+        existing_backups = self.existing_backups(all_tenants=all_tenants)
+
+        _LI('Starting Volumes Backup')
+        for vol in volumes:
+            vol_name = vol.name or vol.id
+            _LI('Processing volume %s', vol_name)
+            backup_name = self.name_prefix + vol.id
+
+            # See owner tenant and check if it's us
+            owner_tenant_id = getattr(vol, 'os-vol-tenant-attr:tenant_id')
+            same_tenant = (self.client.client.auth_ref['token']['tenant']['id']
+                           == owner_tenant_id)
+
+            # When we must keep tenant and it's not us, we connect as them
+            if keep_tenant and not same_tenant:
+                _LI("Using owner's tenant")
+                tenant_client= client.Client(version=2,
+                                             username=self.username,
+                                             api_key=self.api_key,
+                                             tenant_id=owner_tenant_id,
+                                             auth_url=self.auth_url)
+            else:
+                tenant_client = self.client
+
+            # Do the backup
+            try:
+                backup = self.backup_volume(vol, name=backup_name,
+                                            client=tenant_client)
+            except BackupIsDown:
+                raise
+            except Exception as e:
+                _LX('Exception while doing backup')
+                failed.append(vol)
+                backup = None
+
+            # On success
+            else:
+                backups.append(backup)
+                existing_backups[vol.id].append(backup)
+                # If we limit the number of backups and we have too many
+                # backups for this volume
+                if (keep_only and
+                    len(existing_backups.get(vol.id, tuple())) > keep_only):
+                    _LI('Removing old backups')
+                    remove = len(existing_backups[vol.id]) - keep_only
+                    # We may have to remove multiple backups and we remove the
+                    # oldest ones, which are the first on the list.
+                    for __ in xrange(remove):
+                        back = existing_backups[vol.id].pop(0)
+                        self._delete_resource(back, need_up=True)
+            _LI('Backup completed')
+        _LI('Finished with backups')
+        return (backups, failed)
+
+    def _wait_for(self, resource, allowed_states, expected_states=None, need_up=False):
+        """Waits for a resource to come to a specific state.
+        
+        :param resource: Resource we want to wait for
+        :param allowed_states: iterator with allowed intermediary states
+        :param expected_states: states we expect to have at the end, if None
+                                is supplied then anything is good.
+        :param need_up: If wee need backup service to be up and running
+        :return: The most updated resource
+        """
+        # TODO: Add a timeout
+        while resource.status in allowed_states:
+            time.sleep(self.poll_delay)
+            if need_up and not self.is_up:
+                raise BackupIsDown(what=resource)
+            resource = resource.manager.get(resource.id)
+
+        if expected_states and resource.status not in expected_states:
+            raise UnexpectedStatus(what=resource)
+                
+        return resource
+
+    def _delete_resource(self, resource, wait=True, need_up=False):
+        # Snapshots and volumes, may be used with backups if need_up=True
+        if not resource:
+            return
+
+        try:
+            resource.delete()
+            if wait:
+                self._wait_for(resource, ('deleting',), need_up=need_up)
+
+        # If it doesn't exist we consider it "deleted"
+        except client.exceptions.NotFound:
+            pass
+
+    def _create_and_wait(self, msg, module, arguments, resources=tuple()):
+        """Creates a resource and waits for completion, with optional cleanup
+        on error.
+
+        :param msg: Message to display on start
+        :param module: Module to create resource from
+        :param arguments: Arguments for resource creation
+        :param resources: Allocated resources that must be cleaned up on error
+        :return: Created resource
+        """
+        def _cleanup(new_resource):
+            self._delete_resource(new_resource)
+            for res in resources:
+                self._delete_resource()
+
+        _LI(msg)
+        result = None
+        try:
+            result = module.create(**arguments)
+            result = self._wait_for(result, ('creating',), 'available', True)
+        except:
+            _cleanup(result)
+            raise
+                
+        return result
+
+    def backup_volume(self, volume, name=None, client=None):
+        """Backup a volume using a volume object or it's id.
+        
+        :param volume: Volume object or volume id as a string.
+        :param name: Name for the backup
+        :param client: If we want ot use a specific client instead of this
+                       instance's client. Usefull when creating backups for
+                       other tenants.
+        :return: Backup object
+        """
+        if isinstance(volume, str):
+            # TODO: This could fail
+            volume = self.client.volumes.get(volume)
+
+        # Use given client or instance's client
+        client = client or self.client
+        name = name or self.name_prefix + volume.id
+
+        # Use encoded original's volume info as description
+        description = BackupInfo(volume)
+
+        if volume.status == 'in-use':
+            _LI('Volume online so this is a multi-step process')
+
+            # Force snapshot since volume it's in-use
+            snapshot = self._create_and_wait(
+                'Creating snapshot', client.volume_snapshots,
+                arguments=dict(
+                    volume_id=volume.id, force=True, name='tmp ' + name,
+                    description='Temporary snapshot for backup',
+                    metadata=volume.metadata))
+
+            # Create temporary volume from snapshot
+            tmp_vol = self._create_and_wait(
+                'Creating temp volume from snapshot', client.volumes,
+                arguments=dict(
+                    size=snapshot.size, snapshot_id=snapshot.id,
+                    name='tmp '+name,
+                    description='Temporary volume for backup',
+                    metadata=volume.metadata), resources=(snapshot,))
+
+            # Backup temporary volume
+            backup = self._create_and_wait(
+                'Doing the actual backup', client.backups,
+                arguments=dict(
+                    volume_id=tmp_vol.id, name=name, container=None,
+                    description=str(description)),
+                    resources=(snapshot, tmp_vol))
+
+            # Cleanup temporary resources
+            snapshot.delete()
+            tmp_vol.delete()
+
+        elif volume.status == 'available':
+            backup = self._create_and_wait(
+                'Creating direct backup', client.backups,
+                arguments=dict(
+                    volume_id=volume.id, name=name, container=None,
+                    description=str(description)))
+
+        else:
+            _LE("We don't backup volume because status is %s", volume.status)
+            raise UnexpectedStatus(what=volume)
+
+        return backup
+
+    def _is_auto_backup(self, backup):
+        """Check if a backup was created by us."""
+        # It must have the right prefix
+        if not backup.name or not backup.name.startswith(self.name_prefix):
+            return False
+
+        # And description must contain json formatted data base64 encoded
+        try:
+            BackupInfo(backup)
+        except ValueError:
+            return False
+        return True
+
+    def existing_backups(self, all_tenants=True):
+        """Retrieve existing backups and return a defaultdict with backups
+        grouped by original volume id."""
+        # Get list of backups from Cinder Backup service
+        backups = self.client.backups.list(search_opts=
+                                           {'all_tenants': all_tenants})
+
+        # Leave only automatic backups based on the backup name
+        backups = filter(self._is_auto_backup, backups)
+
+        # Dictionary of volumes with the list of backups for each one
+        volumes = defaultdict(list)
+        for backup in backups:
+            backup.created_at_dt = datetime.strptime(backup.created_at,
+                                                    "%Y-%m-%dT%H:%M:%S.%f")
+            volumes[backup.name[len(self.name_prefix):]].append(backup)
+
+        # Order the backups for each volume oldest first
+        for volume in volumes.itervalues():
+            volume.sort(key=attrgetter('created_at_dt'))
+
+        return volumes
+
+    def _restore_and_wait(self, client, backup_id, new_volume_id):
+         # Restore the backup
+        restore = client.restores.restore(backup_id=backup_id,
+                                          volume_id=new_volume_id)
+
+        volume = client.volumes.get(restore.volume_id)
+        result = self._wait_for(volume, ('restoring-backup',), 'available',
+                                True)
+        return result
+            
+    def restore_volume(self, backup, keep_tenant, restore_id, restore_data):
+        """Restore a specific backup
+
+        :param backup: Backup object to restore
+        :param keep_tenant: If we want to restore original tenant
+        :param restore_id: If we want to restore to the original volume id
+        :param restore_data: Restore original volume name and description
+        :return: None
+        """
+        # Decode original volume information from backup object's description
+        backup_info = BackupInfo(backup)
+
+        # If we want to restore the id the volume must exist
+        if restore_id:
+            try:
+                volume = self.client.volumes.get(backup_info.id)
+                if volume.status != 'available':
+                    _LW('Skipping, cannot restore to a non-available volume')
+                    return
+            except client.exceptions.NotFound:
+                _LW("Skipping, destination id doesn't exist")
+                return
+            except client.exceptions.ClientException as e:
+                _LW('Error when checking volume (%s)', e)
+                return
+            new_id = backup_info.id
+        # If we don't give a new id one will be auto generated
+        else:
+            new_id = None
+
+        # Are we the original tenant for the volume?
+        same_tenant = (self.client.client.auth_ref['token']['tenant']['id']
+                       == backup_info.owner_tenant_id)
+
+        # If we have to restore the tenant we need a different client
+        if keep_tenant and not same_tenant:
+            _LI("Using owner's tenant")
+            tenant_client= client.Client(version=2,
+                                         username=self.username,
+                                         api_key=self.api_key,
+                                         tenant_id=backup_info.owner_tenant_id,
+                                         auth_url=self.auth_url)
+        else:
+            tenant_client = self.client
+
+        # Restore the backup
+        restore = self._restore_and_wait(tenant_client, backup.id, new_id)
+                   
+        # Recover volume name and description
+        if restore_data:
+            restore.update(name=backup_info.name,
+                          description=backup_info.description)
+        else:
+            restore.update(description='auto_restore_' + backup_info.id + '_' +
+                                      backup_info.name)
+
+    def restore_all(self, all_tenants=True, keep_tenant=True, restore_id=False,
+                    restore_data=True, volume_id=None, backup_id=None):
+        """Restore volumes.
+
+        :param all_tenants: Restore volumes created by any tenant
+        :param keep_tenant: Restore the volumes' tenants
+        :param restore_id: We want to restore volumes to their original ids
+        :param restore_data: We want to restore volume names and descriptions
+        :param volume_id: Restore a specific volume id (cannot be used together
+                          with backup_id)
+        :param backup_id: Restore a specific backup_id (cannot be used together
+                          with volume_id)
+        """
+        _LI('Starting Volumes Restore')
+        backups = self.existing_backups(all_tenants=all_tenants)
+
+        # If we want to get a specific volume's backup
+        if volume_id:
+            backup = backups.get(volume_id)
+            if not backup:
+                _LE('no backups for volume %s', volume_id)
+                exit(1)
+
+            # Fake that this is the only volume with backups
+            backups = {volume_id: backups[volume_id]}
+
+        # If we want a specific backup
+        elif backup_id:
+            # Look for it in the volumes
+            for vol, backs in backups.iteritems():
+                back = filter(lambda b: b.id == backup_id, backs)
+                # If we find it fake that this is the only backup
+                if back:
+                    backups = {vol: [back]}
+                    break
+            else:
+                _LE("backup doesn't exist")
+                exit(1)
+
+        for volume_id in backups:
+            # Get the latest backup
+            backup = backups[volume_id][-1]
+            _LI('Processing volume %s', volume_id)
+
+            try:
+                self.restore_volume(backup, keep_tenant=keep_tenant,
+                                    restore_id=restore_id,
+                                    restore_data=restore_data)
+            except BackupIsDown:
+                raise
+            except:
+                _LX('Exception while doing backup')
+                pass
+
+            _LI('Restore completed')
+        _LI('Finished with restores')
+
+    def export_metadata(self, filename, all_tenants=False):
+        """Export backup metadata to a file."""
+        existing_backs = self.existing_backups(all_tenants=all_tenants)
+        # Flatten the lists
+        backups = [back for backs in existing_backs.itervalues()
+                   for back in backs
+                   if back.status not in ('deleting', 'error')]
+
+        metadatas = []
+        for back in backups:
+            #TODO add try
+            try:
+                metadata = self.client.backups.export_record(back.id)
+            except Exception as e:
+                _LE('Error getting metadata for backup %(id)s (%(exception)s)',
+                    {'id': back.id, 'exception': e})
+            else:
+                metadatas.append(metadata)
+
+        # TODO add try
+        try:
+            with open(filename, 'w') as f:
+                json.dump(metadatas, f)
+        except Exception as e:
+            _LE('Error saving metadata to %(filename)s (%(exception)s)',
+                {'filename': filename, 'exception': exception})
+
+    def import_metadata(self, filename):
+        """Import backup metadata to DB from file."""
+        try:
+            with open(filename, 'r') as f:
+                records = json.load(f)
+        except Exception as e:
+            _LE('Error loading from file %(filename)s (%(exception)s)',
+                {'filename': filename, 'exception': e})
+
+        for metadata in records:
+            try:
+                self.client.backups.import_record(**metadata)
+            except Exception as e:
+                _LE('Error importing record %s', metadata)
+
+    def list_backups(self, all_tenants=False):
+        def _separator(separator):
+            return (separator * (19+1) +
+                    '+' + separator * (1+36+1) + 
+                    '+' + separator * (1+36+1) +
+                    '+' + separator * (1+4+1))
+
+        backups = self.existing_backups(all_tenants)
+        format = '{:^19s} | {:^36} | {:^36} | {:5}'
+        print format.format('Created at', 'Volume ID', 'Backup ID', 'Size')
+        print(_separator('='))
+        mid_separator = _separator('-')
+        for volume_id in backups:
+            for backup in backups[volume_id]:
+                print format.format(str(backup.created_at_dt), volume_id,
+                                    backup.id, backup.size)
+            print mid_separator
+
+           
 
 def main(args):
     backup = BackupService(username=args.username,
@@ -546,7 +769,17 @@ def main(args):
         _LC('Cinder Backup is ' + backup.backup_status)
         exit(1)
 
-    if args.action == BACKUP:
+    if args.action == LIST:
+        backup.list_backups(all_tenants=args.all_tenants)
+
+    elif args.action == EXPORT:
+        backup.export_metadata(filename=args.filename,
+                               all_tenants=args.all_tenants)
+
+    elif args.action == IMPORT:
+        backup.import_metadata(filename=args.filename)
+
+    elif args.action == BACKUP:
         try:
             backup.backup_all(all_tenants=args.all_tenants,
                               keep_tenant=args.keep_tenants,
@@ -559,24 +792,7 @@ def main(args):
             backup.export_metadata(filename=args.filename,
                                    all_tenants=args.all_tenants)
 
-    elif args.action == LIST:
-        backups = backup.existing_backups(all_tenants=args.all_tenants)
-        format = '{:^19s} | {:^36} | {:^36} | {:5}'
-        print format.format('Created at', 'Volume ID', 'Backup ID', 'Size')
-        print('=' * (19+1) +
-              '+' + '=' * (1+36+1) +
-              '+' + '=' * (1+36+1) +
-              '+' + '=' * (1+4+1))
-        for volume_id in backups:
-            for backup in backups[volume_id]:
-                print format.format(str(backup.created_at_dt), volume_id,
-                                    backup.id, backup.size)
-            print('-' * (19+1) +
-                  '+' + '-' * (1+36+1) +
-                  '+' + '-' * (1+36+1) +
-                  '+' + '-' * (1+4+1))
-
-    elif args.action == RESTORE:
+    else: # if args.action == RESTORE:
         # TODO look if metadata from other tenants is restored correctly
         # (they can see it)
         if args.filename:
@@ -588,14 +804,6 @@ def main(args):
                            restore_data=args.restore_data,
                            volume_id=args.volume_id,
                            backup_id=args.backup_id)
-
-    elif args.action == EXPORT:
-        backup.export_metadata(filename=args.filename,
-                               all_tenants=args.all_tenants)
-
-    else:
-        backup.import_metadata(filename=args.filename)
-
 
 if __name__ == '__main__':
     parser = get_arg_parser()
