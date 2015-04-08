@@ -40,6 +40,7 @@ LIST = 'list'
 EXPORT = 'export'
 IMPORT = 'import'
 
+
 def get_arg_parser():
     """Create parser with script options."""
 
@@ -49,58 +50,59 @@ def get_arg_parser():
             sys.stderr.write('\nerror: %s\n' % message)
             sys.exit(2)
 
-
     general_description = (
-    "Cinder auto backup management tool\n\n"
-    "This is a helper for OpenStack's Cinder backup functionality to help "
-    "create and restore automatic backups as well and export and import backup"
-    "metadata.\n\n"
-    "Metadata for backup volumes is stored in the DB and if this is lost, "
-    "Cinder won't be able to restore volumes from backups. So it is "
-    "recommended to always export your backup metadata and keep it safe.\n\n"
-    "Currently Cinder can only backup available volumes, so for in-use volumes"
-    " this helper will create a temporary snapshot of the volume, create a "
-    "temporary volume from that snapshot and create the backup from that "
-    "snapshot. This means that if we look in Cinder backup the volume id will "
-    "not match the originator. This helper will show original volume id on "
-    "list. Once Cinder supports backup from snapshot the volume creation step "
-    "will be removed.\n\n"
-    "Incremental backups is a feature that's being developed right now and "
-    "should be available soon.\n\n"
-    "Cinder backup by default doesn't restore volume name and description, but"
-    " this helper does." )
+        "Cinder auto backup management tool\n\n"
+        "This is a helper for OpenStack's Cinder backup functionality to help "
+        "create and restore automatic backups as well and export and import "
+        "backup metadata.\n\n"
+        "Metadata for backup volumes is stored in the DB and if this is lost, "
+        "Cinder won't be able to restore volumes from backups. So it is "
+        "recommended to always export your backup metadata and keep it "
+        "safe.\n\n"
+        "Currently Cinder can only backup available volumes, so for in-use "
+        "volumes this helper will create a temporary snapshot of the volume, "
+        "create a temporary volume from that snapshot and create the backup "
+        "from that snapshot. This means that if we look in Cinder backup the "
+        "volume id will not match the originator. This helper will show "
+        "original volume id on list. Once Cinder supports backup from snapshot"
+        " the volume creation step will be removed.\n\n"
+        "Incremental backups is a feature that's being developed right now "
+        "and should be available soon.\n\n"
+        "Cinder backup by default doesn't restore volume name and "
+        "description, but this helper does.")
 
     general_epilog = (
-    "Use {action} -h to see specific action help\n\n"
-    "*Basic usage:*\n"
-    "Create backups for all our volumes using credentials from environment and"
-    " keep only the previous backup (delete older ones):\n"
-    "\tcinderback.py backup --keep-only 2\n"
-    "Restore latests backups for all our volumes using credentials from "
-    "environment:\n"
-    "\tcinderback.py restore\n"
-    "List existing automatic backups:\n"
-    "\tcinderback.py list\n"
-    "\n*Advanced usage:*\n"
-    "As administrator create all backups of tenants, export metadata and hide "
-    "backups from tenants:\n"
-    "\tcinderback.py --all-tenants --forget-tenants --export-metadata "
-    "./backup.metadata backup\n"
-    "As administrator import metadata and restore all backups created by us "
-    "(if we created volumes for other tenants they will also be restored) to "
-    "their original ids (volumes with those ids must exist):\n"
-    "\tcinderback.py --restore-id --import-metadata ./backup.metadata "
-    "restore\n"
-    "As administrator import oldest backups for every volume (created by us or"
-    " by tenants):\n"
-    "\tcinderback.py --all-tenants restore\n"
-    "Restore only 1 specific automatic backup using the backup id (used for "
-    "non last backups):\n"
-    "\tcinderback.py restore --backup_id $backup_uuid\n"
-    "Restore only automatic backup for specific volume:\n"
-    "\tcinderback.py restore --volume-id $volume_id\n"
-    "List existing backups from all tenants:\n"
-    "\tcinderback.py --all-tenants list\n")
+        "Use {action} -h to see specific action help\n\n"
+        "*Basic usage:*\n"
+        "Create backups for all our volumes using credentials from environment"
+        " and keep only the previous backup (delete older ones):\n"
+        "\tcinderback.py backup --keep-only 2\n"
+        "Restore latests backups for all our volumes using credentials from "
+        "environment:\n"
+        "\tcinderback.py restore\n"
+        "List existing automatic backups:\n"
+        "\tcinderback.py list\n"
+        "\n*Advanced usage:*\n"
+        "As administrator create all backups of tenants, export metadata and "
+        "hide backups from tenants:\n"
+        "\tcinderback.py --all-tenants --forget-tenants --export-metadata "
+        "./backup.metadata backup\n"
+        "As administrator import metadata and restore all backups created by "
+        "us (if we created volumes for other tenants they will also be "
+        "restored) to their original ids (volumes with those ids must "
+        "exist):\n"
+        "\tcinderback.py --restore-id --import-metadata ./backup.metadata "
+        "restore\n"
+        "As administrator import oldest backups for every volume (created by "
+        "us or by tenants):\n"
+        "\tcinderback.py --all-tenants restore\n"
+        "Restore only 1 specific automatic backup using the backup id (used "
+        "for non last backups):\n"
+        "\tcinderback.py restore --backup_id $backup_uuid\n"
+        "Restore only automatic backup for specific volume:\n"
+        "\tcinderback.py restore --volume-id $volume_id\n"
+        "List existing backups from all tenants:\n"
+        "\tcinderback.py --all-tenants list\n")
 
     parser = MyParser(description=general_description,
                       epilog=general_epilog, version=VERSION,
@@ -118,7 +120,7 @@ def get_arg_parser():
     parser.add_argument('--os-password', metavar='<auth-password>',
                         dest='password', default=os.environ['OS_PASSWORD'],
                         help='Password for OpenStack user. '
-                            'Default=env[OS_PASSWORD]')
+                        'Default=env[OS_PASSWORD]')
     parser.add_argument('--os-tenant-name', metavar='<auth-tenant-name>',
                         dest='tenant_name',
                         default=os.environ['OS_TENANT_NAME'],
@@ -152,15 +154,15 @@ def get_arg_parser():
                                                    'backups')
 
     # Keep tenants argument is common to backup and restore
-    forget_tenants=dict(dest='keep_tenants', action='store_false',
-                        default=True, help="don't make backups available to "
-                        "original tenant (default available)")
+    forget_tenants = dict(dest='keep_tenants', action='store_false',
+                          default=True, help="don't make backups available to "
+                          "original tenant (default available)")
 
     # Timeout argument is common to backup and restore
-    timeout=dict(dest='max_secs_gbi', type=int, default=300,
-                        help='maximum expected time in seconds to transfer ' 
-                        'each GB, for timeout purposes. Backup will be deleted'
-                        ' if it timeouts (default 5 minutes)')
+    timeout = dict(dest='max_secs_gbi', type=int, default=300,
+                   help='maximum expected time in seconds to transfer each '
+                   'GB, for timeout purposes. Backup/Restored Volume  will be '
+                   'deleted if it timeouts (default 5 minutes)')
 
     # Backup action
     parser_backup = subparsers.add_parser(BACKUP, help='do backups')
@@ -294,7 +296,7 @@ class BackupService(object):
     """Backup creation and restoration class."""
 
     # Poll interval in seconds when creating or destroying resources.
-    default_poll_deplay=10
+    default_poll_deplay = 10
 
     def __init__(self, username, api_key, project_id, auth_url,
                  poll_delay=None, name_prefix='auto_backup_',
@@ -361,14 +363,14 @@ class BackupService(object):
         :param keep_only: Amount of backups to keep including the new one.
                           Older ones will be deleted.
         :return: ([successful_backup_object], [failed_volume_object])
-                                
+
         """
         backups = []
         failed = []
 
         # Get visible volumes
-        volumes = self.client.volumes.list(search_opts=
-                                           {'all_tenants':all_tenants})
+        volumes = self.client.volumes.list(
+            search_opts={'all_tenants': all_tenants})
 
         # Get existing backups
         existing_backups = self.existing_backups(all_tenants=all_tenants)
@@ -387,11 +389,11 @@ class BackupService(object):
             # When we must keep tenant and it's not us, we connect as them
             if keep_tenant and not same_tenant:
                 _LI("Using owner's tenant")
-                tenant_client= client.Client(version=2,
-                                             username=self.username,
-                                             api_key=self.api_key,
-                                             tenant_id=owner_tenant_id,
-                                             auth_url=self.auth_url)
+                tenant_client = client.Client(version=2,
+                                              username=self.username,
+                                              api_key=self.api_key,
+                                              tenant_id=owner_tenant_id,
+                                              auth_url=self.auth_url)
             else:
                 tenant_client = self.client
 
@@ -404,7 +406,7 @@ class BackupService(object):
             except TimeoutError:
                 _LE('Timeout on backup')
                 failed.append(vol)
-                backup=None
+                backup = None
             except Exception as e:
                 _LX('Exception while doing backup')
                 failed.append(vol)
@@ -416,8 +418,8 @@ class BackupService(object):
                 existing_backups[vol.id].append(backup)
                 # If we limit the number of backups and we have too many
                 # backups for this volume
-                if (keep_only and
-                    len(existing_backups.get(vol.id, tuple())) > keep_only):
+                if (keep_only and len(existing_backups.get(vol.id, tuple())) >
+                        keep_only):
                     _LI('Removing old backups')
                     remove = len(existing_backups[vol.id]) - keep_only
                     # We may have to remove multiple backups and we remove the
@@ -432,7 +434,7 @@ class BackupService(object):
     def _wait_for(self, resource, allowed_states, expected_states=None,
                   need_up=False):
         """Waits for a resource to come to a specific state.
-        
+
         :param resource: Resource we want to wait for
         :param allowed_states: iterator with allowed intermediary states
         :param expected_states: states we expect to have at the end, if None
@@ -451,7 +453,7 @@ class BackupService(object):
 
         if expected_states and resource.status not in expected_states:
             raise UnexpectedStatus(what=resource)
-                
+
         return resource
 
     def _delete_resource(self, resource, wait=True, need_up=False):
@@ -491,7 +493,7 @@ class BackupService(object):
         except:
             _cleanup(result)
             raise
- 
+
         return result
 
     def backup_volume(self, volume, name=None, client=None):
