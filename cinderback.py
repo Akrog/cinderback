@@ -18,6 +18,7 @@
 import argparse
 import base64
 from collections import defaultdict
+from distutils.version import LooseVersion
 from datetime import datetime
 import json
 import logging
@@ -28,9 +29,10 @@ import time
 
 from cinderclient import client
 from cinderclient import v2
+from cinderclient import __version__ as cinder_version
 
 
-VERSION = '0.1'
+__version__ = '0.1'
 
 
 # Available script actions
@@ -105,15 +107,16 @@ def get_arg_parser():
         "\tcinderback.py --all-tenants list\n")
 
     parser = MyParser(description=general_description,
-                      epilog=general_epilog, version=VERSION,
+                      epilog=general_epilog, version=__version__,
                       add_help=True,
                       formatter_class=argparse.RawTextHelpFormatter)
 
     # Common arguments to all actions
     parser.add_argument('-a', '--all-tenants', dest='all_tenants',
                         action='store_true', default=False,
-                        help='include volumes/backups from all tenants'
-                             '(default only from supplied tenant)')
+                        help='include volumes/backups from all tenants, needs '
+                        'cinderclient v1.1.1 (default only from supplied '
+                        'tenant)')
     parser.add_argument('--os-username', metavar='<auth-user-name>',
                         dest='username', default=os.environ['OS_USERNAME'],
                         help='OpenStack user name. Default=env[OS_USERNAME]')
@@ -297,6 +300,8 @@ class BackupService(object):
 
     # Poll interval in seconds when creating or destroying resources.
     default_poll_deplay = 10
+    WANT_V = '1.1.1'
+    HAS_SEARCH_OPTS = LooseVersion(cinder_version) >= LooseVersion(WANT_V)
 
     def __init__(self, username, api_key, project_id, auth_url,
                  poll_delay=None, name_prefix='auto_backup_',
@@ -315,8 +320,12 @@ class BackupService(object):
                                     api_key=api_key,
                                     project_id=project_id,
                                     auth_url=auth_url)
+
         self.status_msg = ''
         self.max_secs_gbi = max_secs_gbi or 300
+
+        if not self.HAS_SEARCH_OPTS:
+            _LW('--all-tenants disabled, need cinderclient v%s', self.WANT_V)
 
     @property
     def backup_status(self):
@@ -354,6 +363,12 @@ class BackupService(object):
         self.status_msg = "Not loaded"
         return False
 
+    def _list_arguments(self, all_tenants):
+        if self.HAS_SEARCH_OPTS:
+            return {'search_opts': {'all_tenants': all_tenants}}
+
+        return {}
+
     def backup_all(self, all_tenants=True, keep_tenant=True, keep_only=0):
         """Creates backup for all visible volumes.
 
@@ -369,8 +384,7 @@ class BackupService(object):
         failed = []
 
         # Get visible volumes
-        volumes = self.client.volumes.list(
-            search_opts={'all_tenants': all_tenants})
+        volumes = self.client.volumes.list(**self._list_arguments(all_tenants))
 
         # Get existing backups
         existing_backups = self.existing_backups(all_tenants=all_tenants)
@@ -579,8 +593,7 @@ class BackupService(object):
         """Retrieve existing backups and return a defaultdict with backups
         grouped by original volume id."""
         # Get list of backups from Cinder Backup service
-        backups = self.client.backups.list(
-            search_opts={'all_tenants': all_tenants})
+        backups = self.client.backups.list(**self._list_arguments(all_tenants))
 
         # Leave only automatic backups based on the backup name
         backups = filter(self._is_auto_backup, backups)
