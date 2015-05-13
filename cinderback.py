@@ -402,7 +402,7 @@ class BackupService(object):
 
             # When we must keep tenant and it's not us, we connect as them
             if keep_tenant and not same_tenant:
-                _LI("Using owner's tenant")
+                _LI("Using owner's tenant id %s", owner_tenant_id)
                 tenant_client = client.Client(version=2,
                                               username=self.username,
                                               api_key=self.api_key,
