@@ -282,9 +282,24 @@ class BackupServiceException(Exception):
         super(BackupServiceException, self).__init__(*args, **kwargs)
         self.what = what
 
+    def __str__(self):
+        return u'%s: %s' % (self.__class__.__name__, self.what)
+
 
 class UnexpectedStatus(BackupServiceException):
-    pass
+    def __init__(self, what, intermediate='', final='', *args, **kwargs):
+        super(UnexpectedStatus, self).__init__(what, *args, **kwargs)
+        self.intermediate = intermediate
+        self.final = final
+
+    def __str__(self):
+        if self.intermediate or self.final:
+            steps = (' [intermediate: %s, final: %s]' %
+                     (self.intermediate, self.final))
+        else:
+            steps = ''
+        return (u'%s: Status is %s%s' %
+                (self.__class__.__name__, self.what.status, steps))
 
 
 class TimeoutError(BackupServiceException):
@@ -421,6 +436,8 @@ class BackupService(object):
                 _LE('Timeout on backup')
                 failed.append(vol)
                 backup = None
+            except UnexpectedStatus:
+                failed.append(vol)
             except Exception as e:
                 _LX('Exception while doing backup')
                 failed.append(vol)
@@ -467,7 +484,8 @@ class BackupService(object):
             resource = resource.manager.get(resource.id)
 
         if expected_states and resource.status not in expected_states:
-            raise UnexpectedStatus(what=resource)
+            raise UnexpectedStatus(what=resource, intermediate=allowed_states,
+                                   final=expected_states)
 
         return resource
 
@@ -727,9 +745,8 @@ class BackupService(object):
                                     restore_data=restore_data)
             except BackupIsDown:
                 raise
-            except:
-                _LX('Exception while doing backup')
-                pass
+            except Exception as exc:
+                _LE('Exception while doing backup: %s', exc)
 
             _LI('Restore completed')
         _LI('Finished with restores')
