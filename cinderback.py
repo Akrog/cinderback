@@ -391,8 +391,8 @@ class BackupService(object):
 
         _LI('Starting Volumes Backup')
         for vol in volumes:
-            vol_name = vol.name or vol.id
-            _LI('Processing volume %s', vol_name)
+            _LI('Processing %dGB from volume %s (id: %s)', vol.size, vol.name,
+                vol.id)
             backup_name = self.name_prefix + vol.id
 
             # See owner tenant and check if it's us
@@ -717,7 +717,8 @@ class BackupService(object):
         for volume_id in backups:
             # Get the latest backup
             backup = backups[volume_id][-1]
-            _LI('Processing volume %s', volume_id)
+            _LI('Processing %dGB from volume id %s in backup %s', backup.size,
+                volume_id, backup.id)
 
             try:
                 self.restore_volume(backup, keep_tenant=keep_tenant,
