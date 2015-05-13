@@ -225,7 +225,7 @@ def create_logger(quiet=False):
     ch.setLevel(logging.INFO)
 
     # create formatter for ch
-    formatter = logging.Formatter('%(levelname)s:%(message)s')
+    formatter = logging.Formatter('%(levelname)s: %(message)s')
     ch.setFormatter(formatter)
 
     # add ch to logger
