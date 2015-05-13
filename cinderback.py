@@ -434,12 +434,13 @@ class BackupService(object):
                 # backups for this volume
                 if (keep_only and len(existing_backups.get(vol.id, tuple())) >
                         keep_only):
-                    _LI('Removing old backups')
                     remove = len(existing_backups[vol.id]) - keep_only
                     # We may have to remove multiple backups and we remove the
                     # oldest ones, which are the first on the list.
                     for __ in xrange(remove):
                         back = existing_backups[vol.id].pop(0)
+                        _LI('Removing old backup %s from %s', back.id,
+                            back.created_at_dt)
                         self._delete_resource(back, need_up=True)
             _LI('Backup completed')
         _LI('Finished with backups')
