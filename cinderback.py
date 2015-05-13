@@ -777,17 +777,19 @@ class BackupService(object):
             return (separator * (19+1) +
                     '+' + separator * (1+36+1) +
                     '+' + separator * (1+36+1) +
+                    '+' + separator * (1+9+1) +
                     '+' + separator * (1+4+1))
 
         backups = self.existing_backups(all_tenants)
-        format = '{:^19s} | {:^36} | {:^36} | {:5}'
-        print format.format('Created at', 'Volume ID', 'Backup ID', 'Size')
+        format = '{:^19s} | {:^36} | {:^36} | {:^9} | {:5}'
+        print format.format('Created at', 'Volume ID', 'Backup ID', 'Status',
+                            'Size')
         print(_separator('='))
         mid_separator = _separator('-')
         for volume_id in backups:
             for backup in backups[volume_id]:
                 print format.format(str(backup.created_at_dt), volume_id,
-                                    backup.id, backup.size)
+                                    backup.id, backup.status, backup.size)
             print mid_separator
 
 
