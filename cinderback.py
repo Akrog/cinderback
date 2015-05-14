@@ -416,10 +416,7 @@ class BackupService(object):
             owner_tenant_id = getattr(vol, 'os-vol-tenant-attr:tenant_id')
 
             # If we want to keep the tenant, get the right client
-            if keep_tenant:
-                tenant_client = self.get_client(owner_tenant_id)
-            else:
-                tenant_client = self.client
+            tenant_client = self.get_client(owner_tenant_id, keep_tenant)
 
             # Do the backup
             try:
@@ -670,13 +667,8 @@ class BackupService(object):
                        == backup_info.owner_tenant_id)
 
         # If we have to restore the tenant we need a different client
-        if keep_tenant and not same_tenant:
-            _LI("Using owner's tenant")
-            tenant_client = client.Client(
-                version=2, username=self.username, api_key=self.api_key,
-                tenant_id=backup_info.owner_tenant_id, auth_url=self.auth_url)
-        else:
-            tenant_client = self.client
+        tenant_client = self.get_client(backup_info.owner_tenant_id,
+                                        keep_tenant)
 
         # Restore the backup
         restore = self._restore_and_wait(tenant_client, backup.id, new_id)
@@ -773,10 +765,12 @@ class BackupService(object):
             _LE('Error saving metadata to %(filename)s (%(exception)s)',
                 {'filename': filename, 'exception': e})
 
-    def get_client(self, tenant_id):
+    def get_client(self, tenant_id, keep_tenant=True):
         """Return a client for requested tenant"""
         # If we are the original tenant of the volume
-        if (self.client.client.auth_ref['token']['tenant']['id'] == tenant_id):
+        if (not keep_tenant or
+                self.client.client.auth_ref['token']['tenant']['id']
+                == tenant_id):
             return self.client
 
         _LI("Using tenant id %s", tenant_id)
