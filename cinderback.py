@@ -788,6 +788,7 @@ class BackupService(object):
         except Exception as e:
             _LE('Error loading from file %(filename)s (%(exception)s)',
                 {'filename': filename, 'exception': e})
+            return False
 
         for data in records:
             # Select client to use
@@ -797,6 +798,9 @@ class BackupService(object):
                 client.backups.import_record(**data['metadata'])
             except Exception as e:
                 _LE('Error importing record %s', metadata)
+                return False
+
+        return True
 
     def list_backups(self, all_tenants=False):
         def _separator(separator):
@@ -857,7 +861,8 @@ def main(args):
         # TODO look if metadata from other tenants is restored correctly
         # (they can see it)
         if args.filename:
-            backup.import_metadata(filename=args.filename)
+            if not backup.import_metadata(filename=args.filename):
+                return
             # Give it a little time to update the DB
             time.sleep(1)
 
