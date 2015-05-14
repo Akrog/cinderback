@@ -740,6 +740,7 @@ class BackupService(object):
 
     def export_metadata(self, filename, all_tenants=False):
         """Export backup metadata to a file."""
+        _LI('Exporting metadata to %s', filename)
         existing_backs = self.existing_backups(all_tenants=all_tenants)
         # Flatten the lists
         backups = [back for backs in existing_backs.itervalues()
@@ -782,6 +783,7 @@ class BackupService(object):
 
     def import_metadata(self, filename):
         """Import backup metadata to DB from file."""
+        _LI('Importing metadata from %s', filename)
         try:
             with open(filename, 'r') as f:
                 records = json.load(f)
