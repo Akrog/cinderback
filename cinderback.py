@@ -858,6 +858,8 @@ def main(args):
         # (they can see it)
         if args.filename:
             backup.import_metadata(filename=args.filename)
+            # Give it a little time to update the DB
+            time.sleep(1)
 
         backup.restore_all(all_tenants=args.all_tenants,
                            keep_tenant=args.keep_tenants,
