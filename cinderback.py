@@ -118,18 +118,20 @@ def get_arg_parser():
                         'cinderclient v1.1.1 (default only from supplied '
                         'tenant)')
     parser.add_argument('--os-username', metavar='<auth-user-name>',
-                        dest='username', default=os.environ['OS_USERNAME'],
+                        dest='username',
+                        default=os.environ.get('OS_USERNAME', ''),
                         help='OpenStack user name. Default=env[OS_USERNAME]')
     parser.add_argument('--os-password', metavar='<auth-password>',
-                        dest='password', default=os.environ['OS_PASSWORD'],
+                        dest='password',
+                        default=os.environ.get('OS_PASSWORD', ''),
                         help='Password for OpenStack user. '
                         'Default=env[OS_PASSWORD]')
     parser.add_argument('--os-tenant-name', metavar='<auth-tenant-name>',
                         dest='tenant_name',
-                        default=os.environ['OS_TENANT_NAME'],
+                        default=os.environ.get('OS_TENANT_NAME', ''),
                         help='Tenant name. Default=env[OS_TENANT_NAME]')
     parser.add_argument('--os-auth-url', metavar='<auth-url>', dest='auth_url',
-                        default=os.environ['OS_AUTH_URL'],
+                        default=os.environ.get('OS_AUTH_URL', ''),
                         help='URL for the authentication service. '
                              'Default=env[OS_AUTH_URL]')
     parser.add_argument('-q', '--quiet', dest='quiet',
@@ -412,17 +414,10 @@ class BackupService(object):
 
             # See owner tenant and check if it's us
             owner_tenant_id = getattr(vol, 'os-vol-tenant-attr:tenant_id')
-            same_tenant = (self.client.client.auth_ref['token']['tenant']['id']
-                           == owner_tenant_id)
 
-            # When we must keep tenant and it's not us, we connect as them
-            if keep_tenant and not same_tenant:
-                _LI("Using owner's tenant id %s", owner_tenant_id)
-                tenant_client = client.Client(version=2,
-                                              username=self.username,
-                                              api_key=self.api_key,
-                                              tenant_id=owner_tenant_id,
-                                              auth_url=self.auth_url)
+            # If we want to keep the tenant, get the right client
+            if keep_tenant:
+                tenant_client = self.get_client(owner_tenant_id)
             else:
                 tenant_client = self.client
 
@@ -767,7 +762,9 @@ class BackupService(object):
                 _LE('Error getting metadata for backup %(id)s (%(exception)s)',
                     {'id': back.id, 'exception': e})
             else:
-                metadatas.append(metadata)
+                backup_info = BackupInfo(back)
+                metadatas.append({'metadata': metadata,
+                                  'tenant': backup_info.owner_tenant_id})
 
         try:
             with open(filename, 'w') as f:
@@ -775,6 +772,19 @@ class BackupService(object):
         except Exception as e:
             _LE('Error saving metadata to %(filename)s (%(exception)s)',
                 {'filename': filename, 'exception': e})
+
+    def get_client(self, tenant_id):
+        """Return a client for requested tenant"""
+        # If we are the original tenant of the volume
+        if (self.client.client.auth_ref['token']['tenant']['id'] == tenant_id):
+            return self.client
+
+        _LI("Using tenant id %s", tenant_id)
+        return client.Client(version=2,
+                             username=self.username,
+                             api_key=self.api_key,
+                             tenant_id=tenant_id,
+                             auth_url=self.auth_url)
 
     def import_metadata(self, filename):
         """Import backup metadata to DB from file."""
@@ -785,9 +795,12 @@ class BackupService(object):
             _LE('Error loading from file %(filename)s (%(exception)s)',
                 {'filename': filename, 'exception': e})
 
-        for metadata in records:
+        for data in records:
+            # Select client to use
+            client = self.get_client(data['tenant'])
+
             try:
-                self.client.backups.import_record(**metadata)
+                client.backups.import_record(**data['metadata'])
             except Exception as e:
                 _LE('Error importing record %s', metadata)
 
@@ -863,4 +876,14 @@ if __name__ == '__main__':
     parser = get_arg_parser()
     args = parser.parse_args()
     __ = create_logger(quiet=args.quiet)
-    main(args)
+
+    required = {'username': '--os-username or env[OS_USERNAME]',
+                'password': '--os-password or env[OS_PASSWORD]',
+                'tenant_name': '--os-tenant-name or env[OS_TENANT_NAME]',
+                'auth_url': '--os-auth-url or env[OS_AUTH_URL]'}
+    missing = {k: v for k, v in required.iteritems()
+               if not getattr(args, k, None)}
+    if missing:
+        _LE('You must provide %s', ', '.join(required.itervalues()))
+    else:
+        main(args)
