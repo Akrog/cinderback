@@ -571,8 +571,9 @@ class BackupService(object):
                 resources=(snapshot, tmp_vol))
 
             # Cleanup temporary resources
-            snapshot.delete()
+            _LI('Deleting temporary volume and snapsho')
             tmp_vol.delete()
+            snapshot.delete()
 
         elif volume.status == 'available':
             backup = self._create_and_wait(
