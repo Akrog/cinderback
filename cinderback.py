@@ -731,7 +731,7 @@ class BackupService(object):
             except BackupIsDown:
                 raise
             except Exception as exc:
-                _LE('Exception while doing backup: %s', exc)
+                _LE('Exception while restoring backup: %s', exc)
 
             _LI('Restore completed')
         _LI('Finished with restores')
