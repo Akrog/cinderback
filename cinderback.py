@@ -43,6 +43,7 @@ EXPORT = 'export'
 IMPORT = 'import'
 
 _LI = _LW = _LE = _LC = _LX = None
+DEFAULT_LOG_LEVEL = logging.INFO
 
 
 def get_arg_parser():
@@ -221,11 +222,11 @@ def create_logger(quiet=False):
 
     logger = logging.getLogger(__name__)
 
-    logger.setLevel(logging.WARNING if quiet else logging.INFO)
+    logger.setLevel(logging.WARNING if quiet else DEFAULT_LOG_LEVEL)
 
     # create console handler and set level
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
+    ch.setLevel(DEFAULT_LOG_LEVEL)
 
     # create formatter for ch
     formatter = logging.Formatter('%(levelname)s: %(message)s')
