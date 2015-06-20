@@ -58,8 +58,8 @@ def get_arg_parser():
     general_description = (
         "Cinder auto backup management tool\n\n"
         "This is a helper for OpenStack's Cinder backup functionality to help "
-        "create and restore automatic backups as well and export and import "
-        "backup metadata.\n\n"
+        "create and restore automatic backups, with rotation, as well as "
+        "export and import backup metadata.\n\n"
         "Metadata for backup volumes is stored in the DB and if this is lost, "
         "Cinder won't be able to restore volumes from backups. So it is "
         "recommended to always export your backup metadata and keep it "
@@ -71,10 +71,10 @@ def get_arg_parser():
         "volume id will not match the originator. This helper will show "
         "original volume id on list. Once Cinder supports backup from snapshot"
         " the volume creation step will be removed.\n\n"
-        "Incremental backups is a feature that's being developed right now "
-        "and should be available soon.\n\n"
-        "Cinder backup by default doesn't restore volume name and "
-        "description, but this helper does.")
+        "This tool does not support incremental backups since its behavior is "
+        "not consistent between all drivers at this moment.\n\n"
+        "Cinder backup by default doesn't restore volume name and description,"
+        " but this helper does.")
 
     general_epilog = (
         "Use {action} -h to see specific action help\n\n"
@@ -88,8 +88,8 @@ def get_arg_parser():
         "List existing automatic backups:\n"
         "\tcinderback.py list\n"
         "\n*Advanced usage:*\n"
-        "As administrator create all backups of tenants, export metadata and "
-        "hide backups from tenants:\n"
+        "As administrator create backups of all tenants volumes, export "
+        "metadata and hide backups from tenants:\n"
         "\tcinderback.py --all-tenants --forget-tenants --export-metadata "
         "./backup.metadata backup\n"
         "As administrator import metadata and restore all backups created by "
@@ -98,13 +98,13 @@ def get_arg_parser():
         "exist):\n"
         "\tcinderback.py --restore-id --import-metadata ./backup.metadata "
         "restore\n"
-        "As administrator import oldest backups for every volume (created by "
+        "As administrator import newest backups for every volume (created by "
         "us or by tenants):\n"
         "\tcinderback.py --all-tenants restore\n"
         "Restore only 1 specific automatic backup using the backup id (used "
         "for non last backups):\n"
         "\tcinderback.py restore --backup_id $backup_uuid\n"
-        "Restore only automatic backup for specific volume:\n"
+        "Restore only latest automatic backup for specific volume:\n"
         "\tcinderback.py restore --volume-id $volume_id\n"
         "List existing backups from all tenants:\n"
         "\tcinderback.py --all-tenants list\n")
@@ -180,9 +180,10 @@ def get_arg_parser():
     parser_backup.add_argument('--timeout-gb', **timeout)
     parser_backup.add_argument('--keep-only', dest='keep_only', default=0,
                                metavar='<#>',
-                               type=int, help='how many automatic backups to '
-                                              'keep, oldest ones will be '
-                                              'deleted (default keep all)')
+                               type=int, help='backup rotation, how many '
+                                              'automatic backups to keep, '
+                                              'oldest ones will be deleted '
+                                              '(default keep all)')
 
     # Restore action
     parser_restore = subparsers.add_parser(RESTORE, help='restore backups',
