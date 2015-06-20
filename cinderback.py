@@ -42,6 +42,8 @@ LIST = 'list'
 EXPORT = 'export'
 IMPORT = 'import'
 
+_LI = _LW = _LE = _LC = _LX = None
+
 
 def get_arg_parser():
     """Create parser with script options."""
@@ -155,8 +157,7 @@ def get_arg_parser():
                                help='file to import from')
 
     # Backups list action
-    parser_list = subparsers.add_parser(LIST, help='list available automatic '
-                                                   'backups')
+    subparsers.add_parser(LIST, help='list available automatic backups')
 
     # Keep tenants argument is common to backup and restore
     forget_tenants = dict(dest='keep_tenants', action='store_false',
@@ -430,7 +431,7 @@ class BackupService(object):
                 backup = None
             except UnexpectedStatus:
                 failed.append(vol)
-            except Exception as e:
+            except Exception:
                 _LX('Exception while doing backup')
                 failed.append(vol)
                 backup = None
@@ -663,10 +664,6 @@ class BackupService(object):
         else:
             new_id = None
 
-        # Are we the original tenant for the volume?
-        same_tenant = (self.client.client.auth_ref['token']['tenant']['id']
-                       == backup_info.owner_tenant_id)
-
         # If we have to restore the tenant we need a different client
         tenant_client = self.get_client(backup_info.owner_tenant_id,
                                         keep_tenant)
@@ -800,7 +797,7 @@ class BackupService(object):
             try:
                 client.backups.import_record(**data['metadata'])
             except Exception as e:
-                _LE('Error importing record %s', metadata)
+                _LE('Error importing record %s', data['metadata'])
                 return False
 
         return True
