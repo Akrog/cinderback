@@ -851,16 +851,18 @@ def main(args):
 
     elif args.action == BACKUP:
         try:
-            backup.backup_all(all_tenants=args.all_tenants,
-                              keep_tenant=args.keep_tenants,
-                              keep_only=args.keep_only)
+            __, failed = backup.backup_all(all_tenants=args.all_tenants,
+                                           keep_tenant=args.keep_tenants,
+                                           keep_only=args.keep_only)
         except BackupIsDown:
             _LC('Cinder Backup is ' + backup.backup_status)
-            exit(1)
 
         if args.filename:
             backup.export_metadata(filename=args.filename,
                                    all_tenants=args.all_tenants)
+
+        if failed:
+            exit(1)
 
     else:  # if args.action == RESTORE:
         # TODO look if metadata from other tenants is restored correctly
