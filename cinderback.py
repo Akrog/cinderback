@@ -515,7 +515,7 @@ class BackupService(object):
         def _cleanup(new_resource):
             self._delete_resource(new_resource)
             for res in resources:
-                self._delete_resource()
+                self._delete_resource(res)
 
         _LI(msg)
         result = None
