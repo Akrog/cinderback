@@ -578,7 +578,7 @@ class BackupService(object):
                 resources=(snapshot, tmp_vol))
 
             # Cleanup temporary resources
-            _LI('Deleting temporary volume and snapsho')
+            _LI('Deleting temporary volume and snapshot')
             tmp_vol.delete()
             snapshot.delete()
 
