@@ -488,7 +488,8 @@ class BackupService(object):
 
         return resource
 
-    def _delete_resource(self, resource, wait=True, need_up=False):
+    def _delete_resource(self, resource, wait=True, need_up=False,
+                         raise_on_exc=True):
         # Snapshots and volumes, may be used with backups if need_up=True
         if not resource:
             return
@@ -501,6 +502,11 @@ class BackupService(object):
         # If it doesn't exist we consider it "deleted"
         except client.exceptions.NotFound:
             pass
+        except Exception as exc:
+            if raise_on_exc:
+                raise
+            _LI('Error cleaning up %(id)s: %(exc)s.', {'id': resource.id,
+                                                       'exc': exc})
 
     def _create_and_wait(self, msg, module, arguments, resources=tuple()):
         """Creates a resource and waits for completion, with optional cleanup
@@ -513,9 +519,9 @@ class BackupService(object):
         :return: Created resource
         """
         def _cleanup(new_resource):
-            self._delete_resource(new_resource)
+            self._delete_resource(new_resource, raise_on_exc=False)
             for res in resources:
-                self._delete_resource(res)
+                self._delete_resource(res, raise_on_exc=False)
 
         _LI(msg)
         result = None
