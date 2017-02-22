@@ -851,6 +851,7 @@ def main(args):
         backup.import_metadata(filename=args.filename)
 
     elif args.action == BACKUP:
+        failed = True
         try:
             __, failed = backup.backup_all(all_tenants=args.all_tenants,
                                            keep_tenant=args.keep_tenants,
